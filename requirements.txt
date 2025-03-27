@@ -1,0 +1,14 @@
+# Core CAD functionality
+pythonocc-core
+
+# Numerical operations
+numpy
+
+# Excel writing
+openpyxl
+
+# Testing framework
+pytest
+
+# Mesh manipulation library
+trimesh
