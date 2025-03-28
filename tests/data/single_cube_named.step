@@ -1,0 +1,53 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Minimal STEP File - Single Named Cube'),'2;1');
+FILE_NAME('single_cube_named.step','2025-03-27T17:10:00',('Author'),( ''),'MyCAD','MyVersion','');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));
+ENDSEC;
+DATA;
+
+/* Basic Setup */
+#10 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'config_control_design', 2025, #20);
+#20 = APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#30 = PRODUCT_CONTEXT('', #20, '');
+#40 = MECHANICAL_CONTEXT('', #30, '');
+#50 = LENGTH_UNIT() * SI_UNIT(.METRE.) * NAMED_UNIT(#60);
+#60 = (LENGTH_UNIT());
+#70 = PLANE_ANGLE_UNIT() * SI_UNIT(.RADIAN.) * NAMED_UNIT(#80);
+#80 = (PLANE_ANGLE_UNIT());
+#90 = SOLID_ANGLE_UNIT() * SI_UNIT(.STERADIAN.) * NAMED_UNIT(#100);
+#100 = (SOLID_ANGLE_UNIT());
+#110 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.0001), #50, 'DISTANCE_ACCURACY_VALUE', '');
+#120 = GEOMETRIC_REPRESENTATION_CONTEXT(3) * REPRESENTATION_CONTEXT('Context3D', '3D');
+#130 = SHAPE_REPRESENTATION_RELATIONSHIP('SRR', 'Relation', #140, #150);
+
+/* Product Definition - Attempt to name it "MyCube" */
+#140 = PRODUCT('MyCube_ID', 'MyCube', 'A single cube part', (#30));
+#150 = PRODUCT_DEFINITION_SHAPE('', '', #140);
+#160 = PRODUCT_DEFINITION('design', '', #140, #30);
+#170 = PRODUCT_DEFINITION_FORMATION('','',#140);
+#180 = PRODUCT_DEFINITION_CONTEXT('part definition',#20,'design');
+#190 = PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#140));
+
+/* Geometric Data - Simple Unit Cube (BRep) - Very Simplified */
+/* Points */
+#200 = CARTESIAN_POINT('',(0.,0.,0.));
+#210 = CARTESIAN_POINT('',(1.,0.,0.));
+#220 = CARTESIAN_POINT('',(1.,1.,0.));
+#230 = CARTESIAN_POINT('',(0.,1.,0.));
+#240 = CARTESIAN_POINT('',(0.,0.,1.));
+#250 = CARTESIAN_POINT('',(1.,0.,1.));
+#260 = CARTESIAN_POINT('',(1.,1.,1.));
+#270 = CARTESIAN_POINT('',(0.,1.,1.));
+
+/* Placeholder for a simple shape representation */
+/* NOTE: A real BRep definition is much more complex involving faces, edges, vertices, loops etc. */
+/* This is likely insufficient for complex processing but might allow read_step_file to find *a* shape. */
+#300 = SHAPE_REPRESENTATION('CubeShape', (#200, #210, #220, #230, #240, #250, #260, #270), #120);
+#310 = SHAPE_DEFINITION_REPRESENTATION(#150, #300);
+
+/* Link Shape Rep to Product Definition Shape */
+#400 = REPRESENTATION_RELATIONSHIP('', '', #300, #150); /* This might be redundant/incorrect */
+
+ENDSEC;
+END-ISO-10303-21;
