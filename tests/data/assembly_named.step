@@ -1,0 +1,87 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Minimal STEP File - Simple Assembly with Named Parts'),'2;1');
+FILE_NAME('assembly_named.step','2025-03-27T17:10:00',('Author'),( ''),'MyCAD','MyVersion','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }')); /* AP214 Schema often used */
+ENDSEC;
+DATA;
+
+/* Basic Setup */
+#10 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'automotive_design', 2025, #20);
+#20 = APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#30 = PRODUCT_CONTEXT('', #20, '');
+#40 = MECHANICAL_CONTEXT('', #30, '');
+#50 = ( LENGTH_UNIT() SI_UNIT($,.METRE.) );
+#60 = ( PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#70 = ( SOLID_ANGLE_UNIT() SI_UNIT($,.STERADIAN.) );
+#80 = ( NAMED_UNIT(#50) NAMED_UNIT(#60) NAMED_UNIT(#70) );
+#90 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-05),#50,'distance_accuracy_value','confusion accuracy');
+#100 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#90)) GLOBAL_UNIT_ASSIGNED_CONTEXT(#80) REPRESENTATION_CONTEXT('Context3D','3D') );
+
+/* Axis Placement */
+#110=CARTESIAN_POINT('',(0.,0.,0.));
+#120=DIRECTION('',(0.,0.,1.));
+#130=DIRECTION('',(1.,0.,0.));
+#140=AXIS2_PLACEMENT_3D('',#110,#120,#130);
+
+/* --- Part A Definition --- */
+#200 = PRODUCT('PartA_ID','PartA','First Part',(#30));
+#210 = PRODUCT_DEFINITION_SHAPE('','',#200);
+#220 = PRODUCT_DEFINITION('design','',#200,#30);
+/* Simplified Shape Representation for Part A (Cube at origin) */
+#230 = CARTESIAN_POINT('',(0.,0.,0.));
+#231 = CARTESIAN_POINT('',(1.,0.,0.));
+#232 = CARTESIAN_POINT('',(1.,1.,0.));
+#233 = CARTESIAN_POINT('',(0.,1.,0.));
+#234 = CARTESIAN_POINT('',(0.,0.,1.));
+#235 = CARTESIAN_POINT('',(1.,0.,1.));
+#236 = CARTESIAN_POINT('',(1.,1.,1.));
+#237 = CARTESIAN_POINT('',(0.,1.,1.));
+/* Placeholder - Real BRep is complex */
+#240 = SHAPE_REPRESENTATION('PartA_Shape',(#230,#231,#232,#233,#234,#235,#236,#237),#100);
+#250 = SHAPE_DEFINITION_REPRESENTATION(#210,#240);
+
+/* --- Part B Definition --- */
+#300 = PRODUCT('PartB_ID','PartB','Second Part',(#30));
+#310 = PRODUCT_DEFINITION_SHAPE('','',#300);
+#320 = PRODUCT_DEFINITION('design','',#300,#30);
+/* Simplified Shape Representation for Part B (Cube offset at X=3) */
+#330 = CARTESIAN_POINT('',(3.,0.,0.));
+#331 = CARTESIAN_POINT('',(4.,0.,0.));
+#332 = CARTESIAN_POINT('',(4.,1.,0.));
+#333 = CARTESIAN_POINT('',(3.,1.,0.));
+#334 = CARTESIAN_POINT('',(3.,0.,1.));
+#335 = CARTESIAN_POINT('',(4.,0.,1.));
+#336 = CARTESIAN_POINT('',(4.,1.,1.));
+#337 = CARTESIAN_POINT('',(3.,1.,1.));
+/* Placeholder */
+#340 = SHAPE_REPRESENTATION('PartB_Shape',(#330,#331,#332,#333,#334,#335,#336,#337),#100);
+#350 = SHAPE_DEFINITION_REPRESENTATION(#310,#340);
+
+/* --- Assembly Structure Definition --- */
+#400 = PRODUCT('Assembly_ID','MyAssembly','Simple Assembly',(#30));
+#410 = PRODUCT_DEFINITION_SHAPE('','',#400); /* Shape of the assembly itself */
+#420 = PRODUCT_DEFINITION('design','',#400,#30);
+
+/* Define assembly component relationships using NEXT_ASSEMBLY_USAGE_OCCURRENCE (NAUO) */
+/* Instance of Part A in Assembly */
+#500 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('NAUO_A','PartA_Instance','Instance of PartA',#220,#420,$);
+#510 = PRODUCT_DEFINITION_CONTEXT('instance',#20,'design');
+#520 = CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#250,#500); /* Relates Part A shape rep to its instance */
+#530 = AXIS2_PLACEMENT_3D('Placement_A',#110,#120,#130); /* Place Part A at origin */
+#540 = MAPPED_ITEM('',#520,#530); /* Maps Part A instance shape with its placement */
+#550 = SHAPE_REPRESENTATION('Mapped_PartA','',(#540)); /* Shape representation for the placed instance */
+#560 = REPRESENTATION_RELATIONSHIP('','',#550,#410); /* Link instance shape rep to assembly shape rep */
+
+/* Instance of Part B in Assembly */
+#600 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('NAUO_B','PartB_Instance','Instance of PartB',#320,#420,$);
+#610 = PRODUCT_DEFINITION_CONTEXT('instance',#20,'design');
+#620 = CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#350,#600); /* Relates Part B shape rep to its instance */
+/* Define placement for Part B (no translation needed as points are already offset) */
+#630 = AXIS2_PLACEMENT_3D('Placement_B',#110,#120,#130); /* Place Part B relative to assembly origin (its points are offset)*/
+#640 = MAPPED_ITEM('',#620,#630);
+#650 = SHAPE_REPRESENTATION('Mapped_PartB','',(#640));
+#660 = REPRESENTATION_RELATIONSHIP('','',#650,#410);
+
+ENDSEC;
+END-ISO-10303-21;
