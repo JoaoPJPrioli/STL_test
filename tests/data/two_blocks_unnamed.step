@@ -1,0 +1,58 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Minimal STEP File - Two Unnamed Cubes'),'2;1');
+FILE_NAME('two_blocks_unnamed.step','2025-03-27T17:10:00',('Author'),( ''),'MyCAD','MyVersion','');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));
+ENDSEC;
+DATA;
+
+/* Basic Setup (Same as above, re-listed for completeness) */
+#10 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'config_control_design', 2025, #20);
+#20 = APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#30 = PRODUCT_CONTEXT('', #20, '');
+#40 = MECHANICAL_CONTEXT('', #30, '');
+#50 = LENGTH_UNIT() * SI_UNIT(.METRE.) * NAMED_UNIT(#60);
+#60 = (LENGTH_UNIT());
+#70 = PLANE_ANGLE_UNIT() * SI_UNIT(.RADIAN.) * NAMED_UNIT(#80);
+#80 = (PLANE_ANGLE_UNIT());
+#90 = SOLID_ANGLE_UNIT() * SI_UNIT(.STERADIAN.) * NAMED_UNIT(#100);
+#100 = (SOLID_ANGLE_UNIT());
+#110 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.0001), #50, 'DISTANCE_ACCURACY_VALUE', '');
+#120 = GEOMETRIC_REPRESENTATION_CONTEXT(3) * REPRESENTATION_CONTEXT('Context3D', '3D');
+
+/* Product Definition 1 (Unnamed) */
+#140 = PRODUCT('Block1_ID', $, 'First block', (#30)); /* $ signifies no specific name */
+#150 = PRODUCT_DEFINITION_SHAPE('', '', #140);
+#160 = PRODUCT_DEFINITION('design', '', #140, #30);
+
+/* Geometric Data - Cube 1 (Origin) - Simplified */
+#200 = CARTESIAN_POINT('',(0.,0.,0.));
+#210 = CARTESIAN_POINT('',(1.,0.,0.));
+#220 = CARTESIAN_POINT('',(1.,1.,0.));
+#230 = CARTESIAN_POINT('',(0.,1.,0.));
+#240 = CARTESIAN_POINT('',(0.,0.,1.));
+#250 = CARTESIAN_POINT('',(1.,0.,1.));
+#260 = CARTESIAN_POINT('',(1.,1.,1.));
+#270 = CARTESIAN_POINT('',(0.,1.,1.));
+#300 = SHAPE_REPRESENTATION('Cube1Shape', (#200, #210, #220, #230, #240, #250, #260, #270), #120);
+#310 = SHAPE_DEFINITION_REPRESENTATION(#150, #300);
+
+/* Product Definition 2 (Unnamed) */
+#440 = PRODUCT('Block2_ID', $, 'Second block', (#30)); /* $ signifies no specific name */
+#450 = PRODUCT_DEFINITION_SHAPE('', '', #440);
+#460 = PRODUCT_DEFINITION('design', '', #440, #30);
+
+/* Geometric Data - Cube 2 (Offset) - Simplified */
+#500 = CARTESIAN_POINT('',(3.,0.,0.)); /* Offset cube */
+#510 = CARTESIAN_POINT('',(4.,0.,0.));
+#520 = CARTESIAN_POINT('',(4.,1.,0.));
+#530 = CARTESIAN_POINT('',(3.,1.,0.));
+#540 = CARTESIAN_POINT('',(3.,0.,1.));
+#550 = CARTESIAN_POINT('',(4.,0.,1.));
+#560 = CARTESIAN_POINT('',(4.,1.,1.));
+#570 = CARTESIAN_POINT('',(3.,1.,1.));
+#600 = SHAPE_REPRESENTATION('Cube2Shape', (#500, #510, #520, #530, #540, #550, #560, #570), #120);
+#610 = SHAPE_DEFINITION_REPRESENTATION(#450, #600);
+
+ENDSEC;
+END-ISO-10303-21;
