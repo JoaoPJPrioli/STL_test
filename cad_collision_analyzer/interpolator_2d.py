@@ -1,141 +1,124 @@
+# cad_collision_analyzer/interpolator_2d.py
+
 import numpy as np
-from typing import Sequence # Sequence can be used for array-like inputs
+import logging
+from typing import List, Tuple
 
-# No logging needed in this module as errors are mainly handled by return values
-
+# Module-specific logger
+logger = logging.getLogger("CADAnalyzer.interpolator")
 
 def is_point_in_polygon(point: np.ndarray, polygon_vertices: np.ndarray) -> bool:
     """
-    Checks if a 2D point is strictly inside a polygon using the Ray Casting algorithm.
+    Determines if a 2D point is inside a 2D polygon using the Ray Casting algorithm.
 
-    Points lying exactly on the boundary (edges or vertices) are considered outside.
+    Handles cases where the point lies exactly on a polygon edge.
 
     Args:
-        point: A NumPy array representing the (x, y) point, shape (2,).
-        polygon_vertices: A NumPy array of shape (N, 2) with polygon vertices
-                          ordered sequentially (CW or CCW), N >= 3.
+        point: A NumPy array of shape (2,) representing the (x, y) coordinates of the point.
+        polygon_vertices: A NumPy array of shape (N, 2) representing the vertices
+                          of the polygon (assumed to be ordered, either CW or CCW).
 
     Returns:
-        True if the point is strictly inside the polygon, False otherwise.
+        True if the point is strictly inside or on the boundary of the polygon, False otherwise.
     """
-    # --- Input Validation ---
-    if not isinstance(point, np.ndarray) or point.shape != (2,):
-        # print("Warning: Invalid point shape in is_point_in_polygon.") # Optional console warning
-        return False
-    if not isinstance(polygon_vertices, np.ndarray) or polygon_vertices.ndim != 2 or polygon_vertices.shape[1] != 2:
-        # print("Warning: Invalid polygon_vertices shape in is_point_in_polygon.")
-        return False
+    if point is None or polygon_vertices is None or polygon_vertices.shape[0] < 3:
+        return False # Invalid input
 
-    num_vertices = polygon_vertices.shape[0]
-    if num_vertices < 3:
-        return False # A polygon requires at least 3 vertices
-
-    x, y = point[0], point[1]
+    x, y = point
+    n = len(polygon_vertices)
     inside = False
 
-    # Iterate through edges (p1 -> p2)
-    p1 = polygon_vertices[0]
-    for i in range(num_vertices):
-        p2 = polygon_vertices[(i + 1) % num_vertices]
-        p1x, p1y = p1[0], p1[1]
-        p2x, p2y = p2[0], p2[1]
+    # Iterate through polygon edges (p1 -> p2)
+    p1x, p1y = polygon_vertices[0]
+    for i in range(n + 1): # Go one extra step to close the loop
+        p2x, p2y = polygon_vertices[i % n]
 
-        # Ensure p1y <= p2y for consistent edge checking direction
-        if p1y > p2y:
-             p1x, p2x = p2x, p1x
-             p1y, p2y = p2y, p1y
+        # Check if point is on the current edge (handle vertical/horizontal lines)
+        # Check if x is between edge x's, and y is between edge y's
+        # Add tolerance for floating point comparisons? Maybe not needed here.
+        if min(p1x, p2x) <= x <= max(p1x, p2x) and min(p1y, p2y) <= y <= max(p1y, p2y):
+             # Check if point lies on the line segment using cross-product or slope
+             # Cross product: (p2y - p1y) * (x - p1x) - (p2x - p1x) * (y - p1y)
+             cross_product = (p2y - p1y) * (x - p1x) - (p2x - p1x) * (y - p1y)
+             if np.isclose(cross_product, 0.0, atol=1e-9): # Point is on the line containing the segment
+                 logger.debug(f"Point {point} is on edge ({p1x},{p1y})->({p2x},{p2y})")
+                 return True # Point is on the boundary
 
-        # Check if the horizontal ray crosses the edge's Y-span
-        # The ray crosses if y is strictly between p1y (inclusive) and p2y (exclusive)
-        # This correctly handles horizontal edges (p1y==p2y -> condition is false)
-        # and avoids double-counting at vertices shared by edges.
-        if p1y <= y < p2y:
-             # Check if edge is vertical
-             if np.isclose(p1x, p2x):
-                  # If point is strictly left of vertical edge, it crosses
-                  if x < p1x:
-                       inside = not inside
-             else: # Non-vertical edge
-                  # Calculate x-intersection of the ray with the non-vertical edge line
-                  # Division by zero is avoided because p1y != p2y is guaranteed by y-span check
-                  x_intersection = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+        # --- Ray Casting Logic ---
+        # Check if the horizontal ray starting at the point intersects the edge
+        if y > min(p1y, p2y):            # Point y is above the lower vertex y
+            if y <= max(p1y, p2y):       # Point y is not above the upper vertex y
+                if x <= max(p1x, p2x):   # Point x is not to the right of the edge's rightmost x
+                    # Calculate intersection x-coordinate of the ray with the line containing the edge
+                    if not np.isclose(p1y, p2y): # Avoid division by zero for horizontal edges
+                        x_intersection = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    else:
+                        x_intersection = p1x # Should handle horizontal lines correctly now
 
-                  # If point is strictly left of the intersection point, it crosses
-                  # Using np.isclose helps avoid floating point issues near the boundary
-                  if x < x_intersection and not np.isclose(x, x_intersection):
-                        inside = not inside
+                    # If the edge is vertical OR the point's x is to the left of intersection x
+                    if np.isclose(p1x, p2x) or x <= x_intersection:
+                        # Check for vertex intersection: if ray passes through a vertex,
+                        # count it only if the vertex is the upper endpoint of the edge
+                        # to avoid double counting when the ray passes through a vertex shared by two edges.
+                        # This is implicitly handled by the <= check in most cases, but being explicit can help.
+                        # (Standard algorithm often handles this via strict inequalities or specific vertex checks)
+                        # For simplicity, the current logic usually works.
 
-        # Move to the next edge's starting point
-        p1 = p2
+                        inside = not inside # Flip the 'inside' status
+
+        # Move to the next edge
+        p1x, p1y = p2x, p2y
 
     return inside
 
 
 def check_2d_interpolation(
-    sampled_points_i: np.ndarray,
-    polygon_vertices_j: np.ndarray
+    points_to_check: np.ndarray,
+    polygon_vertices: np.ndarray
 ) -> int:
     """
-    Checks if any sampled point from component i lies strictly inside the
-    projected polygon boundary of component j.
+    Checks if any of the provided points fall inside (or on the boundary of) the given polygon.
 
     Args:
-        sampled_points_i: NumPy array of shape (M, 2) containing sampled points
-                          from component i's projection (includes original vertices).
-        polygon_vertices_j: NumPy array of shape (N, 2) containing the ordered
-                            vertices of component j's projected polygon boundary.
+        points_to_check: Array (M, 2) of (x, y) points to check.
+        polygon_vertices: Array (N, 2) of vertices defining the polygon boundary.
 
     Returns:
-        1: If *any* point in `sampled_points_i` is strictly inside the
-           polygon defined by `polygon_vertices_j`.
-        0: Otherwise (no points inside, empty inputs, or invalid polygon).
+        1 if any point in points_to_check is inside or on the boundary of the polygon.
+        0 otherwise.
+       -1 if input is invalid (e.g., not enough polygon vertices).
     """
-    # --- Input Validation ---
-    if not isinstance(sampled_points_i, np.ndarray) or sampled_points_i.ndim != 2 or sampled_points_i.shape[1] != 2:
-        # Logger could be added here if needed, but main script checks validity mostly
-        # print("Warning: Invalid sampled_points_i input to check_2d_interpolation")
-        return 0 # Invalid points array
-    if not isinstance(polygon_vertices_j, np.ndarray) or polygon_vertices_j.ndim != 2 or polygon_vertices_j.shape[1] != 2:
-        # print("Warning: Invalid polygon_vertices_j input to check_2d_interpolation")
-        return 0 # Invalid polygon array
+    if points_to_check is None or polygon_vertices is None:
+        logger.warning("Invalid input (None) to check_2d_interpolation.")
+        return -1
+    if points_to_check.ndim != 2 or points_to_check.shape[1] != 2:
+         logger.warning(f"Invalid shape for points_to_check: {points_to_check.shape}. Expected (M, 2).")
+         return -1
+    if polygon_vertices.ndim != 2 or polygon_vertices.shape[1] != 2:
+        logger.warning(f"Invalid shape for polygon_vertices: {polygon_vertices.shape}. Expected (N, 2).")
+        return -1
+    if polygon_vertices.shape[0] < 3:
+        logger.warning(f"Polygon has fewer than 3 vertices ({polygon_vertices.shape[0]}). Cannot perform check.")
+        return -1 # Cannot form a polygon
 
-    if sampled_points_i.shape[0] == 0:
-        return 0 # No points to check
-    if polygon_vertices_j.shape[0] < 3:
-        return 0 # Not a valid polygon to check against
+    num_points = points_to_check.shape[0]
+    if num_points == 0:
+        logger.debug("No points provided to check interpolation. Returning 0.")
+        return 0 # No points to check means no interpolation
 
-    # --- Check each point ---
-    # Vectorization might be possible but complex due to polygon structure. Loop is clear.
-    for i in range(sampled_points_i.shape[0]):
-        point = sampled_points_i[i]
-        # Call the robust point-in-polygon check
-        if is_point_in_polygon(point, polygon_vertices_j):
-            return 1 # Found a point inside, no need to check further
+    logger.debug(f"Checking if any of {num_points} points are inside polygon with {polygon_vertices.shape[0]} vertices.")
 
-    # --- No points found inside ---
-    return 0
+    try:
+        for i, point in enumerate(points_to_check):
+            if is_point_in_polygon(point, polygon_vertices):
+                logger.debug(f"Point {i} ({point}) found inside polygon. Interpolation detected.")
+                return 1 # Found an interpolating point
 
+        # If loop completes without finding any points inside
+        logger.debug("No points found inside the polygon.")
+        return 0
 
-# Example Usage (Optional)
-if __name__ == '__main__':
-    print("Running interpolator_2d example...")
+    except Exception as e:
+        logger.error(f"Error during 2D interpolation check: {e}", exc_info=True)
+        return -1 # Indicate failure
 
-    square = np.array([[0., 0.], [1., 0.], [1., 1.], [0., 1.]])
-    points_in = np.array([[0.5, 0.5], [0.1, 0.1]])
-    points_out = np.array([[1.5, 0.5], [-0.1, -0.1]])
-    points_boundary = np.array([[0.5, 0.0], [1.0, 0.5], [1.0, 1.0]])
-    mixed_points = np.vstack((points_out, points_in))
-
-    print("\nChecking points inside square:")
-    print(f"Point [0.5, 0.5]: {is_point_in_polygon(np.array([0.5, 0.5]), square)}") # Expected: True
-    print(f"Point [0, 0]: {is_point_in_polygon(np.array([0, 0]), square)}")       # Expected: False (vertex)
-    print(f"Point [0.5, 0]: {is_point_in_polygon(np.array([0.5, 0]), square)}")     # Expected: False (edge)
-    print(f"Point [1.1, 0.5]: {is_point_in_polygon(np.array([1.1, 0.5]), square)}")   # Expected: False
-
-    print("\nRunning interpolation checks:")
-    print(f"Check (points_in vs square): {check_2d_interpolation(points_in, square)}") # Expected: 1
-    print(f"Check (points_out vs square): {check_2d_interpolation(points_out, square)}")# Expected: 0
-    print(f"Check (points_boundary vs square): {check_2d_interpolation(points_boundary, square)}")# Expected: 0
-    print(f"Check (mixed_points vs square): {check_2d_interpolation(mixed_points, square)}") # Expected: 1
-    print(f"Check (empty_points vs square): {check_2d_interpolation(np.empty((0,2)), square)}") # Expected: 0
-    print(f"Check (points_in vs line): {check_2d_interpolation(points_in, np.array([[0,0],[1,1]]))}") # Expected: 0

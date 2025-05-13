@@ -1,305 +1,245 @@
+# cad_collision_analyzer/excel_writer.py
+
 import logging
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Union
+import re
 
+# Attempt import
 try:
     import openpyxl
+    from openpyxl.utils.exceptions import IllegalCharacterError
     from openpyxl.workbook import Workbook
     from openpyxl.worksheet.worksheet import Worksheet
-    from openpyxl.styles import Font
-    from openpyxl.utils import get_column_letter
-    OPENPYXL_INSTALLED = True
-except ImportError:
-    OPENPYXL_INSTALLED = False
-    # Define dummy types for type hinting if import fails
-    Workbook = type("Workbook", (), {})
-    Worksheet = type("Worksheet", (), {})
-    Font = type("Font", (), {}) # type: ignore
-    print("WARNING: openpyxl not found. Excel writing functionality will fail.")
+except ImportError as e:
+    logging.getLogger("CADAnalyzer.excel_writer").critical(f"Failed to import openpyxl: {e}. Is openpyxl installed?")
+    raise ImportError(f"openpyxl import failed in excel_writer: {e}") from e
 
-# --- Logging Setup ---
-excel_logger = logging.getLogger(__name__)
-# Add a basic handler if none are configured
-if not excel_logger.handlers:
-    excel_logger.setLevel(logging.WARNING)
-    ch = logging.StreamHandler() # Output warnings/errors to console
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    excel_logger.addHandler(ch)
+# Module-specific logger
+logger = logging.getLogger("CADAnalyzer.excel_writer")
+
+# Configure logging for Excel writer errors (optional separate file)
+excel_error_logger = logging.getLogger("ExcelWriterErrors")
+if not excel_error_logger.handlers:
+    excel_error_handler = logging.FileHandler('excel_writer_errors.log', mode='a')
+    excel_error_formatter = logging.Formatter('%(asctime)s - %(levelname)s - File: %(filename)s - Sheet: %(sheet)s - %(message)s')
+    excel_error_handler.setFormatter(excel_error_formatter)
+    excel_error_logger.addHandler(excel_error_handler)
+    excel_error_logger.setLevel(logging.WARNING)
+    excel_error_logger.propagate = False
+
+
+# Regex for characters disallowed in Excel sheet names
+INVALID_SHEET_NAME_CHARS = re.compile(r'[\\*?:/\[\]]')
+# Maximum sheet name length
+MAX_SHEET_NAME_LENGTH = 31
+
+def _sanitize_sheet_name(name: str) -> str:
+    """Removes invalid characters and truncates sheet names for Excel."""
+    # Remove invalid characters
+    sanitized = INVALID_SHEET_NAME_CHARS.sub('_', name)
+    # Truncate to maximum length
+    truncated = sanitized[:MAX_SHEET_NAME_LENGTH]
+    if truncated != name:
+        logger.debug(f"Sanitized sheet name from '{name}' to '{truncated}'")
+    return truncated
+
+def _sanitize_cell_value(value: Any) -> Any:
+    """Removes illegal XML characters from cell values."""
+    if isinstance(value, str):
+        # Basic check for common illegal characters (control chars except tab, newline, return)
+        # Openpyxl usually handles this, but being explicit can sometimes help.
+        # This regex removes characters in the ranges \x00-\x08, \x0B-\x0C, \x0E-\x1F
+        cleaned_value = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', value)
+        if cleaned_value != value:
+             logger.debug(f"Sanitized cell value content.")
+        return cleaned_value
+    return value
 
 
 class ExcelWriter:
     """
-    Handles the creation and writing of analysis results to an Excel (.xlsx) file.
+    A class for writing analysis data to an Excel file using openpyxl.
 
-    Attributes:
-        filename (str): The path to the Excel file to be created.
-        wb (Workbook): The openpyxl Workbook object.
+    Handles sheet creation, data writing, and basic sanitization.
     """
 
     def __init__(self, filename: str):
         """
-        Initializes the ExcelWriter.
+        Initializes the ExcelWriter with a filename and creates a new workbook.
 
         Args:
-            filename: The name (including path) for the output Excel file.
-
-        Raises:
-            ImportError: If openpyxl is not installed.
+            filename: The path to the Excel file to create/overwrite.
         """
-        if not OPENPYXL_INSTALLED:
-            raise ImportError("openpyxl library is required but not installed.")
-
-        self.filename: str = filename
+        self.filename = filename
         self.wb: Workbook = openpyxl.Workbook()
-
-        # Remove the default sheet created by openpyxl
+        # Remove the default "Sheet" if it exists
         if "Sheet" in self.wb.sheetnames:
             try:
-                default_sheet = self.wb["Sheet"]
-                self.wb.remove(default_sheet)
-            except KeyError:
-                pass # Ignore if somehow not found despite check
-            except Exception as e:
-                 excel_logger.warning(f"Could not remove default 'Sheet': {e}")
+                del self.wb["Sheet"]
+            except KeyError: # Should not happen with check, but safety first
+                pass
+        logger.info(f"Initialized ExcelWriter for file: {self.filename}")
+
+    def _log_excel_error(self, sheet_name: str, message: str, level: int = logging.ERROR, exc_info=False):
+        """Helper to log errors with context."""
+        log_func = logger.error if level == logging.ERROR else logger.warning
+        log_func(f"Excel Error (Sheet: '{sheet_name}'): {message}", exc_info=exc_info)
+        # Also log to the dedicated error log file
+        excel_error_logger.log(level, message, extra={'filename': self.filename, 'sheet': sheet_name}, exc_info=exc_info)
 
 
-    def _apply_header_style(self, cell):
-        """Applies bold font style to a cell."""
-        if Font and cell: # Check if Font was imported and cell is valid
-             cell.font = Font(bold=True)
-
-    def _adjust_column_widths(self, ws: Worksheet):
-         """Adjusts column widths based on content (simple approach)."""
-         if not Worksheet: return # Skip if openpyxl types not available
-         dims = {}
-         for row in ws.rows:
-             for cell in row:
-                 if cell.value:
-                     # Compare length of value to current max length for column
-                     dims[cell.column_letter] = max((dims.get(cell.column_letter, 0), len(str(cell.value))))
-         for col, value in dims.items():
-             # Add a little padding (e.g., +2)
-             ws.column_dimensions[col].width = value + 2
-
-
-    def add_metadata_sheet(self, metadata: Dict[str, Any]):
+    def add_metadata_sheet(self, metadata: Dict[str, Any], sheet_name: str = "Metadata"):
         """
-        Adds a sheet named "Metadata" containing key-value pairs.
+        Adds a sheet and writes key-value pairs from the metadata dictionary.
 
         Args:
-            metadata: A dictionary where keys are parameter names and
-                      values are the corresponding metadata values.
+            metadata: A dictionary containing metadata parameters and values.
+            sheet_name: The name for the metadata sheet. Defaults to "Metadata".
         """
-        if not Workbook or not Worksheet: return # Skip if openpyxl missing
-
+        safe_sheet_name = _sanitize_sheet_name(sheet_name)
+        logger.debug(f"Adding metadata sheet: '{safe_sheet_name}'")
         try:
-            ws: Worksheet = self.wb.create_sheet(title="Metadata")
-
-            # Write Headers
-            header1 = ws.cell(row=1, column=1, value="Parameter")
-            header2 = ws.cell(row=1, column=2, value="Value")
-            self._apply_header_style(header1)
-            self._apply_header_style(header2)
-
-            # Write Data
-            current_row = 2
+            ws: Worksheet = self.wb.create_sheet(safe_sheet_name)
+            # Add header row
+            ws.append(["Parameter", "Value"])
+            # Add data rows
             for key, value in metadata.items():
-                ws.cell(row=current_row, column=1, value=str(key)) # Ensure key is string
-                # Openpyxl handles basic types like str, int, float, datetime
-                # For complex objects, convert to string
-                if isinstance(value, (list, dict, tuple, set)):
-                     val_to_write = str(value)
-                else:
-                     val_to_write = value
-                ws.cell(row=current_row, column=2, value=val_to_write)
-                current_row += 1
-
-            self._adjust_column_widths(ws)
-
-        except Exception as e:
-            excel_logger.error(f"Failed to add Metadata sheet. Error: {e}", exc_info=True)
-
-
-    def add_component_names_sheet(self, component_names: List[str]):
-        """
-        Adds a sheet named "Component Names" listing components and their indices.
-
-        Args:
-            component_names: A list of component name strings.
-        """
-        if not Workbook or not Worksheet: return # Skip if openpyxl missing
-
-        try:
-            ws: Worksheet = self.wb.create_sheet(title="Component Names")
-
-            # Write Headers
-            header1 = ws.cell(row=1, column=1, value="Index")
-            header2 = ws.cell(row=1, column=2, value="Component Name")
-            self._apply_header_style(header1)
-            self._apply_header_style(header2)
-
-            # Write Data
-            for idx, name in enumerate(component_names):
-                ws.cell(row=idx + 2, column=1, value=idx)
-                ws.cell(row=idx + 2, column=2, value=name)
-
-            self._adjust_column_widths(ws)
+                try:
+                    # Sanitize key and value before appending
+                    safe_key = _sanitize_cell_value(key)
+                    safe_value = _sanitize_cell_value(value)
+                    # Convert numpy types to standard Python types if necessary
+                    if isinstance(safe_value, np.generic):
+                        safe_value = safe_value.item()
+                    ws.append([safe_key, safe_value])
+                except IllegalCharacterError as ice:
+                    self._log_excel_error(safe_sheet_name, f"Illegal character error for key '{key}'. Value: '{value}'. Error: {ice}", level=logging.WARNING)
+                    ws.append([key, f"ERROR: Value contains illegal characters ({ice})"])
+                except Exception as cell_e:
+                     self._log_excel_error(safe_sheet_name, f"Unexpected error writing metadata row for key '{key}'. Error: {cell_e}", level=logging.WARNING, exc_info=True)
+                     ws.append([key, f"ERROR: Failed to write value ({cell_e})"])
 
         except Exception as e:
-            excel_logger.error(f"Failed to add Component Names sheet. Error: {e}", exc_info=True)
+            self._log_excel_error(safe_sheet_name, f"Failed to create or write metadata sheet. Error: {e}", exc_info=True)
 
 
-    def add_matrix_sheet(
-        self,
-        sheet_name: str,
-        matrix: np.ndarray,
-        component_names: List[str]
-    ):
+    def add_component_names_sheet(self, component_names: List[str], sheet_name: str = "Component List"):
         """
-        Adds a sheet containing an N x N matrix with component names as headers.
+        Adds a sheet listing component names with their corresponding matrix indices.
 
         Args:
-            sheet_name: The desired name for the sheet (max 31 chars, avoid invalid chars).
-            matrix: A NumPy array (N x N) containing the matrix data (e.g., 0s and 1s).
-            component_names: A list of N component name strings for headers.
+            component_names: A list of component names (order matches matrix rows/cols).
+            sheet_name: The name for the component list sheet. Defaults to "Component List".
         """
-        if not Workbook or not Worksheet: return # Skip if openpyxl missing
-
-        # Basic sanitization and length check for sheet name
-        if not isinstance(sheet_name, str) or not sheet_name:
-             excel_logger.error("Invalid sheet_name provided for matrix sheet.")
+        safe_sheet_name = _sanitize_sheet_name(sheet_name)
+        logger.debug(f"Adding component list sheet: '{safe_sheet_name}'")
+        if not component_names:
+             logger.warning(f"Component names list is empty. Skipping sheet '{safe_sheet_name}'.")
              return
-        # Replace common invalid characters and limit length
-        safe_sheet_name = "".join(c for c in sheet_name if c.isalnum() or c in ('_', '-'))
-        safe_sheet_name = safe_sheet_name[:31]
-        if not safe_sheet_name: # Handle case where name becomes empty after sanitizing
-             safe_sheet_name = "MatrixSheet"
-        if safe_sheet_name != sheet_name:
-             excel_logger.warning(f"Sanitized sheet name from '{sheet_name}' to '{safe_sheet_name}'.")
-
 
         try:
-            # --- Input Validation ---
-            if not isinstance(matrix, np.ndarray) or matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
-                excel_logger.error(f"Invalid matrix provided for sheet '{safe_sheet_name}'. Matrix must be a square 2D NumPy array.")
-                return
-            n = matrix.shape[0]
-            if len(component_names) != n:
-                excel_logger.error(f"Dimension mismatch for sheet '{safe_sheet_name}'. Matrix size ({n}x{n}) does not match number of component names ({len(component_names)}).")
-                return
-
-            # --- Create Sheet and Headers ---
-            ws: Worksheet = self.wb.create_sheet(title=safe_sheet_name)
-
-            # Write Column Headers (Component Names starting B1)
-            for j, name in enumerate(component_names):
-                col_header_cell = ws.cell(row=1, column=j + 2, value=name)
-                self._apply_header_style(col_header_cell)
-
-            # Write Row Headers (Component Names starting A2)
+            ws: Worksheet = self.wb.create_sheet(safe_sheet_name)
+            # Add header row
+            ws.append(["Matrix Index", "Component Name"])
+            # Add data rows
             for i, name in enumerate(component_names):
-                row_header_cell = ws.cell(row=i + 2, column=1, value=name)
-                self._apply_header_style(row_header_cell)
-
-            # --- Write Matrix Data ---
-            for i in range(n):
-                for j in range(n):
-                    # Ensure value is a standard Python type if needed
-                    value = matrix[i, j]
-                    if isinstance(value, np.generic): # Convert numpy types
-                         value = value.item()
-                    # Write value - openpyxl handles int, float, bool, str
-                    ws.cell(row=i + 2, column=j + 2, value=value)
-
-            self._adjust_column_widths(ws)
+                try:
+                    safe_name = _sanitize_cell_value(name)
+                    ws.append([i, safe_name]) # Index i corresponds to row/col i in matrices
+                except IllegalCharacterError as ice:
+                    self._log_excel_error(safe_sheet_name, f"Illegal character error for component name at index {i}. Name: '{name}'. Error: {ice}", level=logging.WARNING)
+                    ws.append([i, f"ERROR: Name contains illegal characters ({ice})"])
+                except Exception as cell_e:
+                     self._log_excel_error(safe_sheet_name, f"Unexpected error writing component name row for index {i}. Error: {cell_e}", level=logging.WARNING, exc_info=True)
+                     ws.append([i, f"ERROR: Failed to write name ({cell_e})"])
 
         except Exception as e:
-             excel_logger.error(f"Failed to add matrix sheet '{safe_sheet_name}'. Error: {e}", exc_info=True)
+             self._log_excel_error(safe_sheet_name, f"Failed to create or write component list sheet. Error: {e}", exc_info=True)
+
+
+    def add_matrix_sheet(self, sheet_name: str, matrix: np.ndarray, component_names: List[str]):
+        """
+        Adds a sheet and writes a matrix with component names as row/column headers.
+
+        Args:
+            sheet_name: The desired name for the sheet (will be sanitized).
+            matrix: A NumPy array representing the matrix data (e.g., 0, 1, -1).
+            component_names: A list of component names corresponding to the matrix dimensions.
+        """
+        safe_sheet_name = _sanitize_sheet_name(sheet_name)
+        logger.debug(f"Adding matrix sheet: '{safe_sheet_name}'")
+
+        if matrix is None or not isinstance(matrix, np.ndarray):
+             self._log_excel_error(safe_sheet_name, "Invalid matrix data (None or not a numpy array). Skipping sheet.", level=logging.ERROR)
+             return
+        if not component_names:
+            self._log_excel_error(safe_sheet_name, "Component names list is empty. Cannot write matrix headers. Skipping sheet.", level=logging.ERROR)
+            return
+        if matrix.shape[0] != len(component_names) or matrix.shape[1] != len(component_names):
+             self._log_excel_error(safe_sheet_name, f"Matrix dimensions ({matrix.shape}) do not match number of component names ({len(component_names)}). Skipping sheet.", level=logging.ERROR)
+             return
+
+        try:
+            ws: Worksheet = self.wb.create_sheet(safe_sheet_name)
+
+            # --- Write Header Row (Column Names) ---
+            # First cell is empty, followed by component names
+            header_row = [""] + [_sanitize_cell_value(name) for name in component_names]
+            try:
+                ws.append(header_row)
+            except Exception as header_e:
+                 # Log error for the header row itself
+                 self._log_excel_error(safe_sheet_name, f"Failed to write header row. Error: {header_e}", exc_info=True)
+                 # Attempt to continue writing data rows? Or stop? Let's stop for this sheet.
+                 return
+
+
+            # --- Write Data Rows (Row Name + Matrix Data) ---
+            for i, row_data in enumerate(matrix):
+                # First element is the row header (component name)
+                row_header = _sanitize_cell_value(component_names[i])
+                # Convert numpy types in row_data to standard Python types
+                # and sanitize cell values
+                sanitized_row_values = [_sanitize_cell_value(val.item() if isinstance(val, np.generic) else val) for val in row_data]
+
+                # Combine header and data for the row
+                full_row = [row_header] + sanitized_row_values
+                try:
+                    ws.append(full_row)
+                except IllegalCharacterError as ice:
+                     # Log error for specific row, but try to continue
+                     self._log_excel_error(safe_sheet_name, f"Illegal character error writing data row {i} (Component: '{component_names[i]}'). Error: {ice}", level=logging.WARNING)
+                     # Optionally write an error message in the row?
+                     # ws.append([row_header] + ["ERROR: Illegal characters in data"] * len(row_data))
+                except Exception as row_e:
+                     # Log error for specific row, but try to continue
+                     self._log_excel_error(safe_sheet_name, f"Unexpected error writing data row {i} (Component: '{component_names[i]}'). Error: {row_e}", level=logging.WARNING, exc_info=True)
+                     # Optionally write an error message in the row?
+                     # ws.append([row_header] + [f"ERROR: {row_e}"] * len(row_data))
+
+        except Exception as e:
+             self._log_excel_error(safe_sheet_name, f"Failed to create or write matrix sheet. Error: {e}", exc_info=True)
 
 
     def save(self):
         """
-        Saves the Excel workbook to the specified filename.
+        Saves the workbook to the specified filename.
 
-        Logs an error if saving fails (e.g., due to permissions).
+        Logs errors if saving fails.
         """
-        if not Workbook: return # Skip if openpyxl missing
-
+        logger.info(f"Attempting to save Excel workbook to: {self.filename}")
         try:
-            # Ensure directory exists before saving
-            output_dir = os.path.dirname(self.filename)
-            if output_dir and not os.path.exists(output_dir):
-                 excel_logger.info(f"Creating output directory: {output_dir}")
-                 os.makedirs(output_dir, exist_ok=True)
-
             self.wb.save(self.filename)
-            # Use main logger if available, else use module logger
-            main_logger = logging.getLogger('cad_collision_analyzer.main')
-            if main_logger.hasHandlers():
-                 main_logger.info(f"Excel file saved successfully: '{self.filename}'")
-            else:
-                 excel_logger.info(f"Excel file saved successfully: '{self.filename}'")
-        except (IOError, PermissionError) as pe:
-            excel_logger.error(f"Permission denied or I/O error saving Excel file '{self.filename}'. Error: {pe}", exc_info=False) # No need for full stack trace here
+            logger.info(f"Excel workbook saved successfully.")
+        except IOError as e:
+            # IOError could be permissions, disk full, etc.
+            self._log_excel_error("Workbook Save", f"IOError saving Excel file: {e}", exc_info=True)
+            # Re-raise the error so the main script knows saving failed critically
+            raise
         except Exception as e:
-            excel_logger.error(f"Failed to save Excel file '{self.filename}'. Unexpected error: {e}", exc_info=True)
+            # Catch other potential saving errors
+            self._log_excel_error("Workbook Save", f"Unexpected error saving Excel file: {e}", exc_info=True)
+            # Re-raise the error
+            raise
 
-
-# Example Usage (Optional)
-if __name__ == '__main__':
-    if not OPENPYXL_INSTALLED:
-        print("Error: openpyxl is required to run this example.")
-    else:
-        import os
-        import datetime
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-        print("Running ExcelWriter example...")
-        output_file = "example_output.xlsx"
-        try:
-             writer = ExcelWriter(output_file)
-
-             # Add metadata
-             meta = {
-                 "Input File": "assembly_example.step",
-                 "Timestamp": datetime.datetime.now(), # Use current time
-                 "Number of Components": 3,
-                 "Tolerance": 0.01
-             }
-             writer.add_metadata_sheet(meta)
-
-             # Add component names
-             names = ["WidgetA", "GadgetB", "ThingamajigC"]
-             writer.add_component_names_sheet(names)
-
-             # Add a contact matrix
-             contact_mat = np.array([
-                 [1, 0, 1],
-                 [0, 1, 0],
-                 [1, 0, 1]
-             ])
-             writer.add_matrix_sheet("Contact Matrix", contact_mat, names)
-
-             # Add another matrix (e.g., interpolation results)
-             interp_mat = np.array([
-                 [0, 1, 0],
-                 [1, 0, 1],
-                 [0, 1, 0]
-             ])
-             # Test sheet name sanitization
-             writer.add_matrix_sheet("Interpolation Results [Test?/]", interp_mat, names)
-
-             # Save the file
-             writer.save()
-
-             # Check if file exists
-             if os.path.exists(output_file):
-                 print(f"File '{output_file}' created successfully.")
-             else:
-                 print(f"File '{output_file}' was not created (check logs for errors).")
-
-        except ImportError:
-              print("openpyxl not installed.", file=sys.stderr)
-        except Exception as ex:
-              print(f"An error occurred: {ex}", file=sys.stderr)

@@ -1,143 +1,124 @@
+# cad_collision_analyzer/sampler.py
+
 import logging
 import numpy as np
-import random # Using standard random for simplicity, np.random is also fine
+import random
+from typing import Optional
 
-# --- Import Helper Function ---
-# Attempt relative import first, fallback to direct for script execution
+# Attempt import (needed for type hint and potentially internal use)
 try:
-    from .interpolator_2d import is_point_in_polygon
-except ImportError:
-    try:
-        from interpolator_2d import is_point_in_polygon
-    except ImportError:
-        # Define a dummy function only if import fails completely
-        logging.critical("CRITICAL: Could not import is_point_in_polygon from interpolator_2d.")
-        def is_point_in_polygon(point: np.ndarray, polygon_vertices: np.ndarray) -> bool:
-            logging.error("Using dummy is_point_in_polygon! Results will be incorrect.")
-            return False # Fail safe
-
-# --- Logging Setup ---
-sampler_logger = logging.getLogger(__name__)
-# Add a basic handler if none are configured
-if not sampler_logger.handlers:
-    sampler_logger.setLevel(logging.WARNING)
-    ch = logging.StreamHandler() # Output warnings to console
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    sampler_logger.addHandler(ch)
+    from cad_collision_analyzer.interpolator_2d import is_point_in_polygon
+except ImportError as e:
+    # This might indicate a setup issue or the interpolator module itself failed to load
+    logging.getLogger("CADAnalyzer.sampler").critical(f"Failed to import 'is_point_in_polygon' from interpolator_2d: {e}. Check module integrity.")
+    raise ImportError(f"Import failed in sampler: {e}") from e
 
 
-# --- Sampling Function ---
-def sample_polygon_points(polygon_vertices: np.ndarray, num_samples: int) -> np.ndarray:
+# Module-specific logger
+logger = logging.getLogger("CADAnalyzer.sampler")
+
+# Configure logging for sampling errors (optional separate file)
+sampling_error_logger = logging.getLogger("SamplingErrors")
+if not sampling_error_logger.handlers:
+    sampling_error_handler = logging.FileHandler('sampling_errors.log', mode='a')
+    sampling_error_formatter = logging.Formatter('%(asctime)s - %(levelname)s - Polygon Points: %(num_poly_pts)s - %(message)s')
+    sampling_error_handler.setFormatter(sampling_error_formatter)
+    sampling_error_logger.addHandler(sampling_error_handler)
+    sampling_error_logger.setLevel(logging.WARNING)
+    sampling_error_logger.propagate = False
+
+
+def sample_polygon_points(
+    polygon_vertices: np.ndarray,
+    num_additional_samples: int
+) -> np.ndarray:
     """
-    Samples additional points uniformly from within a 2D polygon.
+    Samples points uniformly from within a 2D polygon using rejection sampling.
 
-    Uses rejection sampling within the polygon's bounding box. Relies on the
-    is_point_in_polygon function from the interpolator_2d module.
+    Adds the specified number of sampled points to the original polygon vertices.
 
     Args:
-        polygon_vertices: NumPy array of shape (N, 2) representing the
-                          ordered vertices of the 2D polygon.
-        num_samples: The number of *additional* points to sample uniformly
-                     from within the polygon.
+        polygon_vertices: A NumPy array of shape (N, 2) representing the
+                          vertices of the 2D polygon (assumed to be ordered).
+        num_additional_samples: The target number of *additional* points to
+                                sample uniformly from within the polygon's area.
 
     Returns:
-        A NumPy array of shape (N + S, 2) containing the original vertices
-        plus the successfully sampled points (S <= num_samples).
-        Returns np.empty((0, 2)) if the input vertices are invalid.
+        A NumPy array of shape (N + M, 2) containing the original vertices
+        plus M successfully sampled points (where M <= num_additional_samples).
+        Returns the original polygon_vertices if num_additional_samples <= 0,
+        if the polygon is invalid, or if sampling fails completely.
     """
-    # --- Input Validation ---
-    if not isinstance(polygon_vertices, np.ndarray) or polygon_vertices.ndim != 2 or polygon_vertices.shape[1] != 2:
-        sampler_logger.error("Invalid input: polygon_vertices must be a NumPy array of shape (N, 2).")
-        return np.empty((0, 2), dtype=np.float64)
+    if polygon_vertices is None or not isinstance(polygon_vertices, np.ndarray) or polygon_vertices.ndim != 2 or polygon_vertices.shape[1] != 2:
+         logger.warning("Invalid polygon_vertices input (must be Nx2 numpy array). Returning original vertices.")
+         # Should ideally return None or raise error, but returning input matches original behavior
+         return polygon_vertices if polygon_vertices is not None else np.empty((0, 2))
 
-    num_vertices = polygon_vertices.shape[0]
 
-    if num_vertices < 3:
-        sampler_logger.warning(f"Cannot sample polygon with fewer than 3 vertices ({num_vertices} provided). Returning original vertices.")
-        return polygon_vertices # Return original points as is
+    num_poly_pts = polygon_vertices.shape[0]
+    logger.debug(f"Starting sampling for polygon with {num_poly_pts} vertices. Target additional samples: {num_additional_samples}")
 
-    if num_samples <= 0:
-        return polygon_vertices # Return original points if no sampling needed
-
-    # --- Rejection Sampling ---
-    try:
-        min_xy = np.min(polygon_vertices, axis=0)
-        max_xy = np.max(polygon_vertices, axis=0)
-        min_x, min_y = min_xy[0], min_xy[1]
-        max_x, max_y = max_xy[0], max_xy[1]
-
-        # Check for degenerate bounding box (collinear points)
-        if np.isclose(min_x, max_x) or np.isclose(min_y, max_y):
-             sampler_logger.warning("Polygon bounding box has zero area (points may be collinear). Cannot sample points. Returning original vertices.")
-             return polygon_vertices
-
-        sampled_points_list = []
-        attempts = 0
-        # Set a generous limit based on expected acceptance rate, but capped
-        # Increase multiplier for complex polygons or high sample counts
-        max_total_attempts = max(num_samples * 200, 2000)
-
-        while len(sampled_points_list) < num_samples and attempts < max_total_attempts:
-            # Generate random point within the bounding box
-            rand_x = random.uniform(min_x, max_x)
-            rand_y = random.uniform(min_y, max_y)
-            test_point = np.array([rand_x, rand_y])
-
-            # Check if the point is inside the polygon using the imported function
-            if is_point_in_polygon(test_point, polygon_vertices):
-                sampled_points_list.append(test_point)
-
-            attempts += 1
-
-        if len(sampled_points_list) < num_samples:
-            sampler_logger.warning(f"Reached maximum attempts ({max_total_attempts}) but only generated {len(sampled_points_list)} / {num_samples} samples. Polygon might be complex or have small area relative to bounding box.")
-
-        # --- Combine and Return ---
-        if not sampled_points_list:
-            # No points sampled, return original vertices
-            # Log this specific case as a warning as well
-            if num_samples > 0: # Only warn if samples were requested
-                 sampler_logger.warning(f"No points were successfully sampled within max attempts for polygon with {num_vertices} vertices.")
-            return polygon_vertices
-        else:
-            sampled_array = np.array(sampled_points_list, dtype=np.float64)
-            combined_points = np.vstack((polygon_vertices, sampled_array))
-            return combined_points
-
-    except Exception as e:
-        sampler_logger.error(f"An unexpected error occurred during sampling: {e}", exc_info=True)
-        # Fallback to returning original vertices on unexpected error
+    if num_additional_samples <= 0:
+        logger.debug("Number of additional samples requested is <= 0. Returning original vertices.")
         return polygon_vertices
 
-# Example Usage (Optional)
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    print("Running sampler example...")
+    if num_poly_pts < 3:
+        logger.warning(f"Polygon has fewer than 3 vertices ({num_poly_pts}). Cannot sample points. Returning original vertices.")
+        return polygon_vertices
 
-    square = np.array([[0,0], [1,0], [1,1], [0,1]])
-    num_to_sample = 10
+    # --- Perform Rejection Sampling ---
+    sampled_points_list = []
+    try:
+        # Calculate bounding box
+        min_xy = np.min(polygon_vertices, axis=0)
+        max_xy = np.max(polygon_vertices, axis=0)
+        min_x, min_y = min_xy
+        max_x, max_y = max_xy
 
-    print(f"\nSampling {num_to_sample} points from a square:")
-    sampled_square = sample_polygon_points(square, num_to_sample)
-    print("Shape of result:", sampled_square.shape) # Expected (4 + num_sampled, 2)
-    if sampled_square.shape[0] > 4:
-        print("Original vertices:")
-        print(sampled_square[:4])
-        print("First few sampled points:")
-        print(sampled_square[4:min(8, sampled_square.shape[0])])
+        # Check for degenerate bounding box (polygon might be a line)
+        if np.isclose(min_x, max_x) or np.isclose(min_y, max_y):
+            logger.warning(f"Polygon bounding box is degenerate (likely a line or point). Cannot sample area. Returning original vertices.")
+            return polygon_vertices
 
-    print("\nSampling from a line (should return original):")
-    line = np.array([[0,0], [1,1]])
-    sampled_line = sample_polygon_points(line, 5)
-    print("Shape of result:", sampled_line.shape) # Expected (2, 2)
-    print("Result:", sampled_line)
+        num_generated = 0
+        # Set a reasonable maximum number of attempts to avoid infinite loops
+        # Increase multiplier if sampling efficiency is very low (complex shapes)
+        max_iterations = num_additional_samples * 20 + 100 # Base + factor
 
-    print("\nSampling 0 points:")
-    sampled_zero = sample_polygon_points(square, 0)
-    print("Shape of result:", sampled_zero.shape) # Expected (4, 2)
-    print("Result matches input:", np.allclose(sampled_zero, square))
+        while len(sampled_points_list) < num_additional_samples and num_generated < max_iterations:
+            num_generated += 1
+            # Generate a random point within the bounding box
+            x = random.uniform(min_x, max_x)
+            y = random.uniform(min_y, max_y)
+            point = np.array([x, y])
 
-    print("\nSampling from empty input:")
-    sampled_empty = sample_polygon_points(np.empty((0,2)), 5)
-    print("Shape of result:", sampled_empty.shape) # Expected (0, 2)
+            # Check if the point is inside the polygon
+            if is_point_in_polygon(point, polygon_vertices):
+                sampled_points_list.append(point)
+
+        # Log if the target number wasn't reached
+        num_successfully_sampled = len(sampled_points_list)
+        if num_successfully_sampled < num_additional_samples:
+            msg = (f"Rejection sampling finished after {num_generated}/{max_iterations} iterations. "
+                   f"Generated {num_successfully_sampled}/{num_additional_samples} additional points.")
+            sampling_error_logger.warning(msg, extra={'num_poly_pts': num_poly_pts})
+            logger.warning(msg)
+
+    except Exception as e:
+        # Catch potential errors during bounding box or point-in-polygon check
+        msg = f"Error during rejection sampling: {e}"
+        sampling_error_logger.error(msg, extra={'num_poly_pts': num_poly_pts}, exc_info=True)
+        logger.error(f"Sampling failed: {e}", exc_info=False)
+        # Return only original vertices on error
+        return polygon_vertices
+
+    # --- Combine original vertices and sampled points ---
+    if not sampled_points_list:
+        logger.debug("No additional points were successfully sampled. Returning original vertices.")
+        return polygon_vertices
+    else:
+        sampled_points_array = np.array(sampled_points_list)
+        combined_points = np.vstack([polygon_vertices, sampled_points_array])
+        logger.debug(f"Successfully added {num_successfully_sampled} sampled points. Returning {combined_points.shape[0]} total points.")
+        return combined_points
+
