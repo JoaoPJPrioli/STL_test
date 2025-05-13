@@ -1,14 +1,20 @@
-# Core CAD functionality
-pythonocc-core
+# Required Python packages for the CAD Collision Analyzer
 
-# Numerical operations
-numpy
+# For reading STEP files and performing geometric operations
+# Note: Installation might require specific dependencies based on your OS.
+# Refer to pythonocc-core documentation.
+pythonocc-core>=7.6.0
 
-# Excel writing
-openpyxl
+# For numerical operations (arrays, linear algebra)
+numpy>=1.20.0
 
-# Testing framework
-pytest
+# For mesh representation and some geometric calculations
+trimesh>=3.9.0
 
-# Mesh manipulation library
-trimesh
+# For writing results to Excel files
+openpyxl>=3.0.0
+
+# Optional: If using advanced features or specific trimesh dependencies
+# scipy
+# networkx
+# rtree

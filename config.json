@@ -1,4 +1,4 @@
 {
-  "directions": [[1, 0, 0], [0, 1, 0]],
-  "num_samples": 50
+  "directions": [[1, 0, 0], [-1, 0, 0]],
+  "num_samples": 5
 }
